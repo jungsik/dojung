@@ -54,7 +54,7 @@ from config import (
     W_SOCIAL,
     W_VOLUME,
 )
-from market_calendar import market_status
+from market_calendar import KST, market_status
 from telegram_notifier import TelegramNotifier
 
 REPORT_DIR = Path(__file__).resolve().parent / "reports"
@@ -503,8 +503,10 @@ def main():
     parser.add_argument("--force", action="store_true", help="휴장일에도 강제 실행")
     args = parser.parse_args()
 
-    generated_at = datetime.now()
-    print(f"=== penny_radar {generated_at:%Y-%m-%d %H:%M:%S} ===")
+    # GitHub Actions 러너는 UTC로 도므로 항상 KST로 명시해서 찍는다
+    # (안 그러면 메시지에 "09:43 KST"처럼 9시간 어긋난 시각이 나간다).
+    generated_at = datetime.now(KST)
+    print(f"=== penny_radar {generated_at:%Y-%m-%d %H:%M:%S} KST ===")
 
     # 미국 증시가 쉬는 날에는 스캔도 발송도 하지 않는다. 휴장일 데이터는 전일
     # 종가가 그대로 남아 있어 "오늘의 급등주"로 오해할 여지가 있다.
