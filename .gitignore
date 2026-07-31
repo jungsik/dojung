@@ -1,0 +1,14 @@
+# 스캔 결과물 (매 실행마다 생김)
+reports/
+
+# 파이썬
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# 로컬 비밀값 - 절대 커밋 금지
+.env
+secrets.py
+config_local.py

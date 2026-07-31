@@ -1,0 +1,59 @@
+name: penny radar
+
+# 한국시간 18:03 / 20:03 (평일). GitHub Actions cron은 UTC 기준이고,
+# KST = UTC+9 이므로 09:03 / 11:03 UTC.
+# 정각(:00)은 GitHub 전체가 붐벼 지연이 크므로 3분 비켜서 잡았다.
+# 미국 증시 휴장일 판정은 워크플로가 아니라 penny_radar.py 안에서 한다
+# (미국 동부 날짜 기준 + 공휴일 규칙). 휴장이면 텔레그램을 보내지 않고 종료한다.
+on:
+  schedule:
+    - cron: '3 9,11 * * 1-5'
+  workflow_dispatch:      # 저장소 Actions 탭에서 수동 실행
+    inputs:
+      force:
+        description: '휴장일에도 강제 실행'
+        type: boolean
+        default: false
+      dry:
+        description: '텔레그램 발송 없이 로그만'
+        type: boolean
+        default: false
+
+concurrency:
+  group: penny-radar
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run penny radar
+        env:
+          PENNY_RADAR_TG_TOKEN: ${{ secrets.PENNY_RADAR_TG_TOKEN }}
+          PENNY_RADAR_TG_CHAT: ${{ secrets.PENNY_RADAR_TG_CHAT }}
+          PYTHONIOENCODING: utf-8
+        run: |
+          python penny_radar.py \
+            ${{ (inputs.force  && '--force') || '' }} \
+            ${{ (inputs.dry    && '--dry')   || '' }}
+
+      - name: Upload scan CSV
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: radar-csv-${{ github.run_id }}
+          path: reports/*.csv
+          if-no-files-found: ignore
+          retention-days: 14
