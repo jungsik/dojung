@@ -12,3 +12,4 @@ venv/
 .env
 secrets.py
 config_local.py
+.state/

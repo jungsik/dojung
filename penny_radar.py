@@ -59,6 +59,7 @@ from telegram_notifier import TelegramNotifier
 
 REPORT_DIR = Path(__file__).resolve().parent / "reports"
 REPORT_DIR.mkdir(parents=True, exist_ok=True)
+STATE_PATH = Path(__file__).resolve().parent / ".state" / "sent.json"
 
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
@@ -496,17 +497,66 @@ def save_csv(rows, generated_at):
 
 
 # --------------------------------------------------------------------------
+# 발송 슬롯 관리
+#   GitHub Actions의 cron은 지연되거나 아예 건너뛰는 일이 잦다(무료 러너의 알려진
+#   한계). 그래서 한 슬롯당 cron을 여러 번 걸어두고, 그 슬롯에서 이미 보냈으면
+#   나머지 시도는 스캔조차 하지 않고 빠진다 -> 누락은 줄이고 중복은 막는다.
+# --------------------------------------------------------------------------
+SLOTS = (
+    ("evening", 17.0, 19.5),   # KST 18시 알림
+    ("night", 19.5, 22.0),     # KST 20시 알림
+)
+
+
+def current_slot(now_kst):
+    hour = now_kst.hour + now_kst.minute / 60.0
+    for name, start, end in SLOTS:
+        if start <= hour < end:
+            return name
+    return None
+
+
+def _load_state():
+    try:
+        import json
+        return json.loads(STATE_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def already_sent(day_key, slot):
+    return slot in (_load_state().get(day_key) or [])
+
+
+def mark_sent(day_key, slot):
+    import json
+
+    state = _load_state()
+    # 오늘 것만 남겨 파일이 계속 커지지 않게 한다
+    state = {day_key: sorted(set((state.get(day_key) or []) + [slot]))}
+    STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    STATE_PATH.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+
+
 def main():
     parser = argparse.ArgumentParser(description="미국 동전주 화제성 레이더")
     parser.add_argument("--dry", action="store_true", help="텔레그램 발송 없이 콘솔 출력만")
     parser.add_argument("--top", type=int, default=TOP_N, help=f"상위 N개 (기본 {TOP_N})")
     parser.add_argument("--force", action="store_true", help="휴장일에도 강제 실행")
+    parser.add_argument("--slot-guard", action="store_true",
+                        help="이번 시간대에 이미 보냈으면 건너뜀 (예약 실행용)")
     args = parser.parse_args()
 
     # GitHub Actions 러너는 UTC로 도므로 항상 KST로 명시해서 찍는다
     # (안 그러면 메시지에 "09:43 KST"처럼 9시간 어긋난 시각이 나간다).
     generated_at = datetime.now(KST)
     print(f"=== penny_radar {generated_at:%Y-%m-%d %H:%M:%S} KST ===")
+
+    day_key = f"{generated_at:%Y%m%d}"
+    slot = current_slot(generated_at)
+    if args.slot_guard and slot and already_sent(day_key, slot):
+        print(f"이미 '{slot}' 시간대에 발송했습니다 -> 중복 발송 방지로 종료")
+        return
 
     # 미국 증시가 쉬는 날에는 스캔도 발송도 하지 않는다. 휴장일 데이터는 전일
     # 종가가 그대로 남아 있어 "오늘의 급등주"로 오해할 여지가 있다.
@@ -552,7 +602,11 @@ def main():
     if not notifier.enabled:
         print("텔레그램 토큰/챗ID가 없어 발송을 건너뜁니다. config.py 확인.")
         return
-    print("텔레그램 발송:", "성공" if notifier.send(message) else "실패")
+    sent = notifier.send(message)
+    print("텔레그램 발송:", "성공" if sent else "실패")
+    if sent and slot:
+        # 성공했을 때만 기록한다. 실패하면 백업 실행이 다시 시도해야 하므로.
+        mark_sent(day_key, slot)
 
 
 if __name__ == "__main__":

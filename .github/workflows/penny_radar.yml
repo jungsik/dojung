@@ -1,14 +1,19 @@
 name: penny radar
 
-# 한국시간 18:03 / 20:03 (평일). GitHub Actions cron은 UTC 기준이고,
-# KST = UTC+9 이므로 09:03 / 11:03 UTC.
-# 정각(:00)은 GitHub 전체가 붐벼 지연이 크므로 3분 비켜서 잡았다.
-# 미국 증시 휴장일 판정은 워크플로가 아니라 penny_radar.py 안에서 한다
-# (미국 동부 날짜 기준 + 공휴일 규칙). 휴장이면 텔레그램을 보내지 않고 종료한다.
+# 한국시간 18시대 / 20시대 발송 (평일). cron은 UTC이고 KST = UTC+9.
+#
+# GitHub Actions의 예약 실행은 지연되거나 아예 건너뛰는 일이 잦다(무료 러너의
+# 알려진 한계). 그래서 한 시간대마다 20분 간격으로 3번씩 시도를 걸어두고,
+# 그 시간대에 이미 보냈으면 --slot-guard 가 스캔 전에 빠져나온다.
+# -> 누락 가능성은 낮추고 중복 발송은 막는다.
+#
+# 미국 증시 휴장일 판정은 penny_radar.py 안에서 한다(미국 동부 날짜 + 공휴일 규칙).
+# 휴장이면 텔레그램을 보내지 않고 종료한다.
 on:
   schedule:
-    - cron: '3 9,11 * * 1-5'
-  workflow_dispatch:      # 저장소 Actions 탭에서 수동 실행
+    - cron: '3,23,43 9 * * 1-5'    # KST 18:03 / 18:23 / 18:43
+    - cron: '3,23,43 11 * * 1-5'   # KST 20:03 / 20:23 / 20:43
+  workflow_dispatch:
     inputs:
       force:
         description: '휴장일에도 강제 실행'
@@ -23,6 +28,9 @@ concurrency:
   group: penny-radar
   cancel-in-progress: false
 
+permissions:
+  contents: read
+
 jobs:
   scan:
     runs-on: ubuntu-latest
@@ -36,6 +44,15 @@ jobs:
           python-version: '3.11'
           cache: pip
 
+      # 같은 시간대의 백업 실행이 "이미 보냈는지" 알 수 있도록 상태를 넘긴다.
+      # 매 실행마다 새 키로 저장하고(캐시는 덮어쓰기가 안 됨) 최신 것을 복원한다.
+      - name: Restore send state
+        uses: actions/cache/restore@v4
+        with:
+          path: .state
+          key: radar-state-${{ github.run_id }}
+          restore-keys: radar-state-
+
       - name: Install dependencies
         run: pip install -r requirements.txt
 
@@ -46,8 +63,16 @@ jobs:
           PYTHONIOENCODING: utf-8
         run: |
           python penny_radar.py \
-            ${{ (inputs.force  && '--force') || '' }} \
-            ${{ (inputs.dry    && '--dry')   || '' }}
+            ${{ github.event_name == 'schedule' && '--slot-guard' || '' }} \
+            ${{ (inputs.force && '--force') || '' }} \
+            ${{ (inputs.dry   && '--dry')   || '' }}
+
+      - name: Save send state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .state
+          key: radar-state-${{ github.run_id }}
 
       - name: Upload scan CSV
         if: always()
